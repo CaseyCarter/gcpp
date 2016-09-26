@@ -26,6 +26,7 @@
 using namespace gcpp;
 
 #include <iostream>
+#include <forward_list>
 #include <vector>
 #include <set>
 #include <array>
@@ -40,7 +41,7 @@ struct widget {
 		: v{ value }
 	{
 #ifndef NDEBUG
-		cout << "+widget " << v << "\n";
+		cout << "+widget[" << this << "] " << v << '\n';
 #endif
 	}
 
@@ -48,13 +49,13 @@ struct widget {
 		: v{ that.v }
 	{
 #ifndef NDEBUG
-		cout << "+widget (copy " << v << ")\n";
+		cout << "+widget[" << this << "] (copy[" << &that << "] " << v << ")\n";
 #endif
 	}
 
 	~widget() {
 #ifndef NDEBUG
-		cout << "-widget " << v << "\n";
+		cout << "-widget[" << this << "] " << v << '\n';
 #endif
 	}
 
@@ -396,6 +397,53 @@ void test_deferred_array() {
 
 }
 
+void test_deferred_multi_array() {
+	deferred_heap heap;
+	vector<deferred_ptr<widget[2][3]>> v;
+
+	v.push_back(heap.make_array<widget[2][3]>(3));
+	heap.debug_print();
+
+	v.push_back(heap.make_array<widget[2][3]>(2));
+	heap.debug_print();
+
+	v.push_back(heap.make_array<widget[2][3]>(4));
+
+	heap.debug_print();
+
+	v.push_back(heap.make_array<widget[2][3]>(3));
+
+	heap.debug_print();
+
+	v.erase(v.begin() + 2);
+
+	heap.collect();
+	heap.debug_print();
+}
+
+template <template <class...> class Container>
+void test_deferred_sequence() {
+	deferred_heap heap;
+	Container<int, deferred_allocator<int>> cont({0,1,2,3}, heap);
+	for (auto i : {4,5,6}) {
+		cont.push_back(i);
+	}
+	heap.debug_print();
+
+	auto cont2 = cont;
+	heap.debug_print();
+
+	auto cont3 = std::move(cont);
+	heap.debug_print();
+
+	cont2.clear();
+	heap.collect();
+	heap.debug_print();
+
+	using std::swap;
+	swap(cont2, cont);
+	heap.debug_print();
+}
 
 void test_bitflags() {
 	const int N = 100;	// picked so that we have 3 x 32-bit units + 1 partial unit,
@@ -439,25 +487,23 @@ void test_bitflags() {
 
 
 int main() {
-	//test_page();
+	test_page();
 	test_bitflags();
 
-	//test_deferred_heap();
-	//time_deferred_heap();
+	test_deferred_heap();
+	time_deferred_heap();
 
-	//test_deferred_allocator();
+	test_deferred_allocator();
 
-	//test_deferred_allocator_set();
-	//time_deferred_allocator_set();
+	test_deferred_allocator_set();
+	time_deferred_allocator_set();
 
-	//test_deferred_allocator_vector();
-	//time_deferred_allocator_vector();
+	test_deferred_allocator_vector();
+	time_deferred_allocator_vector();
 
-	//test_deferred_array();
+	test_deferred_array();
+	test_deferred_multi_array();
 
-	//heap.collect();
-	//heap.debug_print();
-
-	return 0;
+	test_deferred_sequence<std::vector>();
 }
 

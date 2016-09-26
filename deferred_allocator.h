@@ -1,18 +1,18 @@
 
-/////////////////////////////////////////////////////////////////////////////// 
-// 
-// Copyright (c) 2016 Herb Sutter. All rights reserved. 
-// 
-// This code is licensed under the MIT License (MIT). 
-// 
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, 
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
-// THE SOFTWARE. 
-// 
+///////////////////////////////////////////////////////////////////////////////
+//
+// Copyright (c) 2016 Herb Sutter. All rights reserved.
+//
+// This code is licensed under the MIT License (MIT).
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+//
 ///////////////////////////////////////////////////////////////////////////////
 
 
@@ -22,6 +22,7 @@
 #include "deferred_heap.h"
 
 #include <vector>
+#include <forward_list>
 #include <list>
 #include <set>
 #include <map>
@@ -48,11 +49,11 @@ namespace gcpp {
 	template <class T>
 	class deferred_allocator
 	{
-		deferred_heap& h;
+		deferred_heap* h;
 	public:
 
 		deferred_heap& heap() const {
-			return h;
+			return *h;
 		}
 
 		using value_type         = T;
@@ -60,58 +61,58 @@ namespace gcpp {
 		using const_pointer      = deferred_ptr<const value_type>;
 		using void_pointer       = deferred_ptr<void>;
 		using const_void_pointer = deferred_ptr<const void>;
-		using difference_type    = ptrdiff_t;
+		using difference_type    = std::ptrdiff_t;
 		using size_type          = std::size_t;
 
-		template <class U> 
-		struct rebind 
+		template <class U>
+		struct rebind
 		{
 			using other = deferred_allocator<U>;
 		};
 
-		deferred_allocator(deferred_heap& h_) noexcept 
-			: h{ h_ }
+		constexpr deferred_allocator(deferred_heap& h_) noexcept
+			: h{ &h_ }
 		{
 		}
 
-		template <class U> 
-		deferred_allocator(deferred_allocator<U> const& that) noexcept
-			: h{ that.heap() }
+		template <class U>
+		constexpr deferred_allocator(deferred_allocator<U> const& that) noexcept
+			: h{ &that.heap() }
 		{
 		}
 
-		pointer allocate(size_type n) 
+		pointer allocate(size_type n)
 		{
-			return h.allocate<value_type>(n);
+			return h->allocate<value_type>(n);
 		}
 
 		void deallocate(pointer, size_type) noexcept
-		{ 
+		{
 		}
 
-		pointer allocate(size_type n, const_void_pointer) 
+		pointer allocate(size_type n, const_void_pointer)
 		{
 			return allocate(n);
 		}
 
 		template <class U, class ...Args>
-		void construct(U* p, Args&& ...args) 
+		void construct(U* p, Args&& ...args)
 		{
-			h.construct<U>(p, std::forward<Args>(args)...);
+			h->construct<U>(p, std::forward<Args>(args)...);
 		}
 
 		template <class U>
 		void destroy(U* p) noexcept
 		{
-			h.destroy<U>(p);
+			h->destroy<U>(p);
 		}
 
-		size_type max_size() const noexcept 
+		constexpr size_type max_size() const noexcept
 		{
-			return std::numeric_limits<size_type>::max();
+			return std::numeric_limits<size_type>::max() / sizeof(value_type);
 		}
 
-		deferred_allocator select_on_container_copy_construction() const 
+		deferred_allocator select_on_container_copy_construction() const
 		{
 			return *this;	// deferred_heap is not copyable
 		}
@@ -119,13 +120,12 @@ namespace gcpp {
 		using propagate_on_container_copy_assignment = std::false_type;
 		using propagate_on_container_move_assignment = std::true_type;
 		using propagate_on_container_swap            = std::true_type;
-		using is_always_equal                        = std::true_type;
 	};
 
 	template <class T, class U>
-	inline bool operator==(deferred_allocator<T> const& a, deferred_allocator<U> const& b) noexcept 
+	inline bool operator==(deferred_allocator<T> const& a, deferred_allocator<U> const& b) noexcept
 	{
-		return &a.h == &b.h;
+		return &a.heap() == &b.heap();
 	}
 
 	template <class T, class U>
@@ -143,6 +143,9 @@ namespace gcpp {
 
 	template<class T>
 	using deferred_vector = std::vector<T, deferred_allocator<T>>;
+
+	template<class T>
+	using deferred_forward_list = std::forward_list<T, deferred_allocator<T>>;
 
 	template<class T>
 	using deferred_list = std::list<T, deferred_allocator<T>>;

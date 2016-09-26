@@ -32,26 +32,42 @@
 namespace gcpp {
 	template<class T> class deferred_ptr;
 
-	//  Copy and remove elements that satisfy pred from [first, last) into out.
-	template<class BidirectionalIterator, class OutputIterator, class Predicate>
-	std::pair<BidirectionalIterator, OutputIterator>
-	unstable_remove_copy_if(BidirectionalIterator first, BidirectionalIterator last,
-		OutputIterator out, Predicate pred)
-	{
-		for (;;) {
-			first = std::find_if(first, last, pred);
-			if (first == last) {
-				break;
-			}
-			// *first satisfies pred. Move it out of the sequence...
-			*out++ = std::move(*first);
-			// ...and replace with the last element of the sequence.
-			if (first == --last) {
-				break;
-			}
-			*first = std::move(*last);
+	//  Tag dispatch utility type that implicitly converts from anything
+	struct any_tag {
+		any_tag() = default;
+
+		template<class T>
+		constexpr any_tag(T&&) noexcept {}
+	};
+
+	//  Destroy object t in place (without deallocating)
+	template<class T>
+	constexpr void destroy_in_place(T& t) noexcept;
+
+	//  "Destroy" trivially destructible object by doing nothing
+	constexpr void destroy_in_place_(std::true_type, any_tag, any_tag) noexcept {}
+
+	//  Destroy non-array object in place
+	template<class T>
+	inline void destroy_in_place_(std::false_type, std::false_type, T& t) noexcept {
+		t.~T();
+	}
+
+	//  Destroy array object in place reverse-element-wise
+	template<class T, std::size_t N>
+	void destroy_in_place_(std::false_type, std::true_type, T (&t)[N]) noexcept {
+		for (auto i = N; i-- > 0;) {
+			destroy_in_place(*(t + i));
 		}
-		return {first, out};
+	}
+
+	//  Tag dispatch to the appropriate destruction handler for T
+	template<class T>
+	constexpr void destroy_in_place(T& t) noexcept {
+		destroy_in_place_(
+			std::is_trivially_destructible<std::remove_all_extents_t<T>>{},
+			std::is_array<T>{},
+			t);
 	}
 
 	//  destructor contains a pointer and type-correct-but-erased dtor call.
@@ -73,7 +89,7 @@ namespace gcpp {
 		void store(gsl::span<T> p) {
 			Expects(p.size() > 0
 				&& "no object to register for destruction");
-			if (!std::is_trivially_destructible<T>::value) {
+			if (!std::is_trivially_destructible<std::remove_all_extents_t<T>>::value) {
 				//	For now we'll just store individual dtors even for arrays.
 				//	Future: To represent destructors for arrays more compactly,
 				//	have an array_destructor type as well with a count and size,
@@ -85,7 +101,7 @@ namespace gcpp {
 				for (auto& t : p) {
 					dtors.push_back({
 						std::addressof(t),		// address
-						[](const void* x) { static_cast<const T*>(x)->~T(); }
+						[](const void* x) { destroy_in_place(*static_cast<const T*>(x)); }
 					});							// dtor to invoke
 				}
 			}
@@ -95,14 +111,14 @@ namespace gcpp {
 		//
 		template<class T>
 		bool is_stored(gsl::not_null<T*> p) const noexcept {
-			return std::is_trivially_destructible<T>::value
+			return std::is_trivially_destructible<std::remove_all_extents_t<T>>::value
 				|| std::any_of(dtors.begin(), dtors.end(),
-					[=](auto x) { return x.p == p.get(); });
+					[=](auto& x) { return x.p == p.get(); });
 		}
 
 		//	Run all the destructors and clear the list
 		//
-		void run_all() {
+		void run_all() noexcept {
 			for (auto& d : dtors) {
 				d.destroy(d.p);	// call object's destructor
 			}
@@ -112,35 +128,50 @@ namespace gcpp {
 		//	Run all the destructors for objects in [begin,end)
 		//
 		bool run(gsl::span<byte> range) {
-			if (range.size() == 0)
+			if (range.size() == 0) {
 				return false;
+			}
+			const auto lo = &*range.begin(), hi = lo + range.size();
+			const auto pred = [=](auto& dtor) { return lo <= dtor.p && dtor.p < hi; };
 
 			//	for reentrancy safety, we'll take a local copy of destructors to be run
-			//
-			//	move any destructors for objects in this range to a local list...
-			//
-			struct cleanup_t {
-				std::vector<destructor> to_destroy;
-
-				// ensure the locally saved destructors are run even if an exception is thrown
-				~cleanup_t() {
-					for (auto& d : to_destroy) {
-						//	=====================================================================
-						//  === BEGIN REENTRANCY-SAFE: ensure no in-progress use of private state
-						d.destroy(d.p);	// call object's destructor
-						//  === END REENTRANCY-SAFE: reload any stored copies of private state
-						//	=====================================================================
-					}
+			std::vector<destructor> to_destroy;
+			auto cleanup2 = gsl::finally([&]{
+				for (auto& d : to_destroy) {
+					//	=====================================================================
+					//  === BEGIN REENTRANCY-SAFE: ensure no in-progress use of private state
+					d.destroy(d.p);	// call object's destructor
+					//  === END REENTRANCY-SAFE: reload any stored copies of private state
+					//	=====================================================================
 				}
-			} cleanup;
+			});
 
-			auto const lo = &*range.begin(), hi = lo + range.size();
-			auto it = unstable_remove_copy_if(
-				dtors.begin(), dtors.end(), std::back_inserter(cleanup.to_destroy),
-				[=](destructor const& dtor) { return lo <= dtor.p && dtor.p < hi; }).first;
-			dtors.erase(it, dtors.end());
+			for (auto first = dtors.begin(); first != dtors.end(); ++first) {
+				//  shift elements that satisfy pred from the end of dtors into to_destroy
+				while (pred(dtors.back())) {
+					to_destroy.push_back(std::move(dtors.back()));
+					dtors.pop_back();
+				}
 
-			return !cleanup.to_destroy.empty();
+				auto rear = dtors.end();
+				--rear;
+				// !pred(*rear) holds
+
+				//  skip over elements until first == rear || pred(*first)
+				first = std::find_if(std::move(first), rear, pred);
+
+				//  if we skipped everything, we're done
+				if (first == rear) {
+					break;
+				}
+
+				//  pred(*first) && !pred(*rear) holds
+				to_destroy.push_back(std::move(*first));
+				*first = std::move(*rear);
+				dtors.pop_back();
+			}
+
+			return !to_destroy.empty();
 		}
 
 		void debug_print() const;
@@ -205,14 +236,14 @@ namespace gcpp {
 			//	explaining static heap tagging would be a distraction in the initial
 			//	presentation from the central concepts that are actually important.
 			deferred_heap* myheap;
-			void* p;
+			const void* p;
 
 			friend deferred_heap;
 
 		protected:
-			void  set(void* p_) noexcept { p = p_; }
+			void  set(const void* p_) noexcept { p = p_; }
 
-			deferred_ptr_void(deferred_heap* heap = nullptr, void* p_ = nullptr)
+			deferred_ptr_void(deferred_heap* heap = nullptr, const void* p_ = nullptr)
 				: myheap{ heap }
 				, p{ p_ }
 			{
@@ -265,7 +296,7 @@ namespace gcpp {
 		public:
 			deferred_heap* get_heap() const noexcept { return myheap; }
 
-			void* get() const noexcept { return p; }
+			const void* get() const noexcept { return p; }
 
 			void  reset() noexcept { p = nullptr; /* leave myheap alone so we can assign again */ }
 		};
@@ -295,9 +326,9 @@ namespace gcpp {
 			//	Future: Don't allocate objects on pages with chunk sizes > 2 * object size
 			//
 			template<class Hint>
-			dhpage(const Hint* /*--*/, size_t n, deferred_heap* heap)
-				: page{ std::max<size_t>(sizeof(Hint) * n * 3, 8192 /*good general default*/),
-						std::max<size_t>(sizeof(Hint), 4) }
+			dhpage(const Hint* /*--*/, std::size_t n, deferred_heap* heap)
+				: page{ std::max<std::size_t>(sizeof(Hint) * n * 3, 8192 /*good general default*/),
+						std::max<std::size_t>(sizeof(Hint), 4) }
 				, live_starts{ page.locations(), false }
 				, myheap{ heap }
 			{ }
@@ -435,7 +466,7 @@ namespace gcpp {
 		using value_type         = T;
 		using pointer            = deferred_ptr<value_type>;
 		using reference          = std::add_lvalue_reference_t<T>;
-		using difference_type    = ptrdiff_t;
+		using difference_type    = std::ptrdiff_t;
 		using iterator_category  = std::random_access_iterator_tag;
 
 		//	Default and null construction. (Note we do not use a defaulted
@@ -458,20 +489,17 @@ namespace gcpp {
 
 		//	Copying.
 		//
-		deferred_ptr(const deferred_ptr& that)
-			: deferred_ptr_void(that)
-		{ }
-
+		deferred_ptr(const deferred_ptr&) = default;
 		deferred_ptr& operator=(const deferred_ptr& that) noexcept = default;	// trivial copy assignment
 
 		//	Copying with conversions (base -> derived, non-const -> const).
 		//
-		template<class U, class = typename std::enable_if<std::is_convertible<U*, T*>::value, void>::type>
-		deferred_ptr(const deferred_ptr<U>& that)
+		template<class U, class = typename std::enable_if<std::is_convertible<U*, T*>::value>::type>
+		deferred_ptr(const deferred_ptr<U>& that) noexcept
 			: deferred_ptr_void(that)
 		{ }
 
-		template<class U, class = typename std::enable_if<std::is_convertible<U*, T*>::value, void>::type>
+		template<class U, class = typename std::enable_if<std::is_convertible<U*, T*>::value>::type>
 		deferred_ptr& operator=(const deferred_ptr<U>& that) noexcept {
 			deferred_ptr_void::operator=(that);
 			return *this;
@@ -594,7 +622,7 @@ namespace gcpp {
 			return *this + -offset;
 		}
 
-		std::add_lvalue_reference_t<T> operator[](size_t offset) noexcept {
+		std::add_lvalue_reference_t<T> operator[](std::size_t offset) noexcept {
 #ifndef NDEBUG
 			//	In debug mode, perform the arithmetic checks by creating a temporary deferred_ptr
 			auto tmp = *this;
@@ -606,7 +634,7 @@ namespace gcpp {
 #endif
 		}
 
-		ptrdiff_t operator-(const deferred_ptr& that) const noexcept {
+		std::ptrdiff_t operator-(const deferred_ptr& that) const noexcept {
 #ifndef NDEBUG
 			//	Note that this intentionally permits subtracting two null pointers
 			if (get() == that.get()) {
@@ -711,7 +739,7 @@ namespace gcpp {
 		//	Accessors.
 		//
 		void* get() const noexcept {
-			return deferred_ptr_void::get();
+			return const_cast<void*>(deferred_ptr_void::get());
 		}
 
 		void* operator->() const noexcept {
@@ -790,7 +818,7 @@ namespace gcpp {
 
 		for (auto& pg : pages) {
 			auto j = find_if(pg.deferred_ptrs.rbegin(), pg.deferred_ptrs.rend(),
-				[&p](auto x) { return x.p == &p; });
+				[&p](auto& x) { return x.p == &p; });
 			if (j != pg.deferred_ptrs.rend()) {
 				*j = pg.deferred_ptrs.back();
 				pg.deferred_ptrs.pop_back();
@@ -888,10 +916,12 @@ namespace gcpp {
 	void deferred_heap::construct_array(gsl::not_null<T*> p, int n)
 	{
 		Expects(n > 0 && "cannot request an empty array");
+		const auto tsize = gsl::narrow_cast<std::ptrdiff_t>(sizeof(T));
+		Expects(n <= std::numeric_limits<std::ptrdiff_t>::max() / tsize);
 
 		//	if there are objects with deferred destructors in this
 		//	region, run those first and remove them
-		destroy_objects({ (byte*)p.get(), gsl::narrow_cast<int>(sizeof(T)) * n });
+		destroy_objects({ (byte*)p.get(), tsize * n });
 
 		//	construct all the objects...
 
@@ -902,7 +932,7 @@ namespace gcpp {
 				::new (static_cast<void*>(p.get() + i)) T{};
 			} catch(...) {
 				while (i-- > 0) {
-					(p.get() + i)->~T();
+					destroy_in_place(*(p.get() + i));
 				}
 				throw;
 			}
@@ -1112,4 +1142,3 @@ namespace gcpp {
 }
 
 #endif
-

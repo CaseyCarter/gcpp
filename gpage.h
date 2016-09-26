@@ -227,7 +227,9 @@ namespace gcpp {
 		current_known_request_bound -= min_alloc * locations_needed;
 
 		//	... and return the storage
-		return &storage[i*min_alloc];
+		auto addr = &storage[i*min_alloc];
+		Ensures(reinterpret_cast<uintptr_t>(addr) % alignof(T) == 0);
+		return addr;
 	}
 
 
