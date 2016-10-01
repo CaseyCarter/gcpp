@@ -51,7 +51,7 @@ namespace gcpp {
 	class gpage {
 	private:
 		const std::size_t				total_size;
-		const std::size_t				min_alloc;
+		const nonnegative<int>			min_alloc;
 		const std::unique_ptr<byte[]>	storage;
 		bitflags						inuse;
 		bitflags						starts;
@@ -63,7 +63,7 @@ namespace gcpp {
 		void operator=(gpage&) = delete;
 
 	public:
-		int locations() const noexcept { return gsl::narrow_cast<int>(total_size / min_alloc); }
+		nonnegative<int> locations() const noexcept { return gsl::narrow_cast<int>(total_size / min_alloc); }
 
 		gsl::span<const byte> extent() const noexcept {
 			return { storage.get(), gsl::narrow_cast<std::ptrdiff_t>(total_size) };
@@ -80,12 +80,12 @@ namespace gcpp {
 
 		//	Construct a page with a given size and chunk size
 		//
-		gpage(std::size_t total_size_ = 1024, std::size_t min_alloc_ = 4);
+		gpage(std::size_t total_size_ = 1024, nonnegative<int> min_alloc_ = 4);
 
 		//  Allocate space for n objects of type T
 		//
 		template<class T>
-		byte* allocate(int n = 1) noexcept;
+		byte* allocate(nonnegative<int> n = 1) noexcept;
 
 		//  Return whether p points into this page's storage and is allocated.
 		//
@@ -99,8 +99,8 @@ namespace gcpp {
 		};
 		struct contains_info_ret {
 			gpage_find_result found;
-			std::size_t		  location;
-			std::size_t		  start_location;
+			nonnegative<int>  location;
+			nonnegative<int>  start_location;
 		};
 		contains_info_ret
 		contains_info(gsl::not_null<const byte*> p) const noexcept;
@@ -112,7 +112,7 @@ namespace gcpp {
 			byte* pointer;
 		};
 		location_info_ret
-		location_info(int where) const noexcept;
+		location_info(nonnegative<int> where) const noexcept;
 
 		//  Deallocate the allocation that starts at *p.
 		//	Note: p must be a pointer previously returned by allocate().
@@ -135,7 +135,7 @@ namespace gcpp {
 	//	Construct a page with a given size and chunk size
 	//
 	inline
-	gpage::gpage(std::size_t total_size_, std::size_t min_alloc_)
+	gpage::gpage(std::size_t total_size_, nonnegative<int> min_alloc_)
 		//	total_size must be a multiple of min_alloc, so round up if necessary
 		: total_size(total_size_ +
 			(total_size_ % min_alloc_ > 0
@@ -158,7 +158,7 @@ namespace gcpp {
 	//  Allocate space for n objects of type T
 	//
 	template<class T>
-	byte* gpage::allocate(int n) noexcept {
+	byte* gpage::allocate(nonnegative<int> n) noexcept {
 		Expects(n > 0 && "cannot request an empty allocation");
 		Expects(static_cast<std::size_t>(n) <=
 			std::numeric_limits<std::size_t>::max() / sizeof(T) &&
@@ -270,7 +270,7 @@ namespace gcpp {
 	//
 	inline
 	gpage::location_info_ret
-	gpage::location_info(int where) const noexcept {
+	gpage::location_info(nonnegative<int> where) const noexcept {
 		return{ starts.get(where), &storage[where*min_alloc] };
 	}
 
@@ -282,7 +282,7 @@ namespace gcpp {
 		// p had better point to our storage ...
 		Expects(contains(p) && "attempt to deallocate - out of range");
 
-		auto here = gsl::narrow_cast<int>((p - storage.get()) / min_alloc);
+		auto here = gsl::narrow_cast<nonnegative<int>>((p - storage.get()) / min_alloc);
 
 		// ... and to the start of an allocation
 		// (note: we could also check alignment here but that seems superfluous)

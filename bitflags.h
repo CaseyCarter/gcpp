@@ -40,7 +40,7 @@ namespace gcpp {
 		static_assert(std::is_unsigned<unit>::value, "unit must be an unsigned integral type.");
 
 		std::unique_ptr<unit[]> bits;
-		const int size;
+		const nonnegative<int> size;
 
 		static constexpr auto bits_per_unit = static_cast<int>(sizeof(unit) * CHAR_BIT);
 
@@ -52,34 +52,29 @@ namespace gcpp {
 
 		//  Return a mask that will select the bit at position from its unit
 		//
-		static unit bit_mask(int at) noexcept {
-			Expects(0 <= at && "position must be non-negative");
+		static constexpr unit bit_mask(nonnegative<int> at) noexcept {
 			return unit(1) << (at % bits_per_unit);
 		}
 
 		//  Return the number of units needed to represent a number of bits
 		//
-		static int unit_count(int bit_count) noexcept {
-			Expects(0 <= bit_count && "bit_count must be non-negative");
+		static constexpr nonnegative<int> unit_count(nonnegative<int> bit_count) noexcept {
 			return (bit_count + bits_per_unit - 1) / bits_per_unit;
 		}
 
 		//  Get the unit that contains the bit at position
 		//
-		unit& bit_unit(int at) noexcept {
-			Expects(0 <= at && "position must be non-negative");
+		unit& bit_unit(nonnegative<int> at) noexcept {
 			return bits[at / bits_per_unit];
 		}
-		const unit& bit_unit(int at) const noexcept {
-			Expects(0 <= at && "position must be non-negative");
+		const unit& bit_unit(nonnegative<int> at) const noexcept {
 			return bits[at / bits_per_unit];
 		}
 
 	public:
-		bitflags(int nbits, bool value)
+		bitflags(nonnegative<int> nbits, bool value)
 			: size{ nbits }
 		{
-			Expects(nbits > 0 && "#bits must be positive");
 			bits = std::make_unique<unit[]>(unit_count(nbits));
 			if (value) {
 				set_all(true);
@@ -88,8 +83,8 @@ namespace gcpp {
 
 		//	Get flag value at position
 		//
-		bool get(int at) const noexcept {
-			Expects(0 <= at && at < size && "bitflags get() out of range");
+		bool get(nonnegative<int> at) const noexcept {
+			Expects(at < size && "bitflags get() out of range");
 			return (bit_unit(at) & bit_mask(at)) != unit(0);
 		}
 
@@ -103,8 +98,8 @@ namespace gcpp {
 
 		//	Set flag value at position
 		//
-		void set(int at, bool value) noexcept {
-			Expects(0 <= at && at < size && "bitflags set() out of range");
+		void set(nonnegative<int> at, bool value) noexcept {
+			Expects(at < size && "bitflags set() out of range");
 			if (value) {
 				bit_unit(at) |= bit_mask(at);
 			}
@@ -121,8 +116,8 @@ namespace gcpp {
 
 		//	Set all flags in positions [from,to) to value
 		//
-		void set(int from, int to, bool value) noexcept {
-			Expects(0 <= from && from <= to && to <= size && "bitflags set() out of range");
+		void set(nonnegative<int> from, nonnegative<int> to, bool value) noexcept {
+			Expects(from <= to && to <= size && "bitflags set() out of range");
 
 			if (from == to) {
 				return;
@@ -187,8 +182,8 @@ namespace gcpp {
 		//	Find next flag in positions [from,to) that is set to value
 		//	Returns index of next flag that is set to value, or "to" if none was found
 		//
-		int find_next(int from, int to, bool value) noexcept {
-			Expects(0 <= from && from <= to && to <= size && "bitflags find_next() out of range");
+		int find_next(nonnegative<int> from, nonnegative<int> to, bool value) noexcept {
+			Expects(from <= to && to <= size && "bitflags find_next() out of range");
 
 			if (from == to) {
 				return to;

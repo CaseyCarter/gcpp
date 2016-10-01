@@ -26,13 +26,13 @@
 
 //	This project requires GSL, see: https://github.com/microsoft/gsl
 #include "gsl/gsl"
+#include "gsl/gsl_nonnegative"
 #include <limits>
 #include <type_traits>
 
 namespace gcpp {
-
 	using gsl::byte;
-
+	using gsl::nonnegative;
 }
 
 //	This is the right way to do totally ordered comparisons
@@ -48,6 +48,8 @@ bool operator>=(const Type& that) const { return compare3(that) >= 0; }
 //  Returns true iff value is within the range of values representable by (arithmetic) type Target
 template<class Target, class Value>
 constexpr bool in_representable_range(Value const& value) {
+	static_assert(std::is_arithmetic<Target>::value && std::is_arithmetic<Value>::value,
+		"in_representable_range only understands Arithmetic types");
 	using C = std::common_type_t<Target, Value>;
 	return static_cast<C>(value) <= static_cast<C>(std::numeric_limits<Target>::max()) &&
 		(!std::is_signed<C>::value || static_cast<C>(std::numeric_limits<Target>::min()) <= static_cast<C>(value)) &&
